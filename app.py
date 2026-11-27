@@ -320,6 +320,12 @@ class StationState:
         p = self.parcels.get(item["code"])
         if not p or p.status not in ("pending", "notified"):
             return False, "Unexpected parcel status; this entry was skipped"
+        cell_id = self._hand_over(p)
+        self._log(f"{p.name} picked up {p.code}; {cell_id or 'shelf'} released", "Pickup")
+        return True, f"{p.name} picked up {p.carrier} parcel {p.code}; {cell_id or ''} released"
+
+    def _hand_over(self, p: Parcel) -> str | None:
+        """Mark a parcel as collected, free its slot and record one undo step."""
         cell_id = p.cell
         prev_status = "notified" if p.status == "notified" else "pending"
         p.status = "picked"
@@ -328,8 +334,35 @@ class StationState:
         if cell_id:
             self.set_cell(cell_id, None)
         self.undo.push({"code": p.code, "cell": cell_id, "prev_status": prev_status})
-        self._log(f"{p.name} picked up {p.code}; {cell_id or 'shelf'} released", "Pickup")
-        return True, f"{p.name} picked up {p.carrier} parcel {p.code}; {cell_id or ''} released"
+        return cell_id
+
+    def proxy_pickup(self, code: str, collector: str, collector_dorm: str) -> tuple[bool, str]:
+        """A roommate or floor neighbour collects someone else's parcel.
+
+        Allowed only when the collector's dorm and the owner's dorm are in the same
+        pickup group. Union-find answers that in almost O(1).
+        """
+        collector = collector.strip()
+        p = self.parcels.get(code.strip())
+        if not p:
+            return False, "Pickup code not found"
+        if p.status not in ("pending", "notified"):
+            return False, f"{p.code} is not waiting for pickup"
+        if not collector:
+            return False, "Enter the name of the person collecting"
+        if collector.lower() == p.name.lower():
+            return False, f"{p.name} is the owner. Use the normal pickup queue instead."
+        if collector_dorm not in self.dorm_groups.parent:
+            return False, f"{collector_dorm} is not a known dorm"
+        if any(item["code"] == p.code for item in self.pick_queue.to_list()):
+            return False, f"{p.name} is already waiting in the pickup queue for {p.code}"
+        if not self.dorm_groups.connected(collector_dorm, p.dorm):
+            return False, (f"{collector} ({collector_dorm}) is not in {p.name}'s pickup group ({p.dorm}). "
+                           "The dorms can be merged on the Pickup Groups page if both students agree.")
+        cell_id = self._hand_over(p)
+        self._log(f"{collector} ({collector_dorm}) collected {p.code} for {p.name}; "
+                  f"{cell_id or 'shelf'} released", "Proxy")
+        return True, f"{collector} collected {p.name}'s parcel {p.code} (same pickup group); {cell_id or ''} released"
 
     def undo_pickup(self) -> tuple[bool, str]:
         if self.undo.is_empty():
@@ -584,6 +617,28 @@ def page_pickup(state: StationState) -> None:
         if st.button("Call next pickup", type="primary", use_container_width=True):
             flash(*state.serve_pickup())
         st.caption("If the parcel at the front was already collected, it is skipped automatically and reported as an anomaly.")
+
+    ui.section("Proxy pickup", "A roommate or floor neighbour collects for someone else — only within the same pickup group")
+    waiting = state.pending()
+    if waiting:
+        options = {f"{p.name} · {p.code} · {p.dorm}": p.code for p in waiting}
+        dorms = sorted(state.dorm_groups.parent.keys())
+        with st.form("proxy"):
+            c3, c4, c5 = st.columns(3)
+            with c3:
+                picked = st.selectbox("Parcel", list(options))
+            with c4:
+                collector = st.text_input("Collected by", placeholder="Roommate's name")
+            with c5:
+                collector_dorm = st.selectbox("Collector's dorm", dorms)
+            go_proxy = st.form_submit_button("Hand over to proxy", type="primary", use_container_width=True)
+        if go_proxy:
+            flash(*state.proxy_pickup(options[picked], collector, collector_dorm))
+        owner = state.parcels.get(options[picked])
+        group = sorted(d for d in dorms if state.dorm_groups.connected(d, owner.dorm))
+        st.caption(f"Union-find: {owner.dorm} can be collected by anyone from {', '.join(group)}.")
+    else:
+        ui.empty("No parcels are waiting for pickup")
 
     ui.section("Current pickup queue", "Circular queue · the front of the line is served first")
     q = state.pick_queue.to_list()
@@ -842,7 +897,7 @@ MAP = [
     ("BST", "weight_bst", "Weight range queries"),
     ("Trie", "name_trie", "Recipient prefix search (a list of codes per name)"),
     ("Graph", "route_graph", "Shortest campus delivery route; road closures"),
-    ("Union-find", "dorm_groups", "Dorm pickup groups"),
+    ("Union-find", "dorm_groups", "Dorm pickup groups; decides who may do a proxy pickup"),
 ]
 
 
