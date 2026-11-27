@@ -1,29 +1,38 @@
-"""第 3 组 · 速达驿站 —— 校园快递驿站管理系统
+"""Group 3 · SwiftStop Parcel — Campus Parcel Station Management System
 
-运行：streamlit run app.py
-覆盖：动态数组、链表、栈、队列、双端队列、哈希表、堆、二叉搜索树、
-      字典树、图、并查集（11 种）。
+Run: streamlit run app_en.py
+Covers: dynamic array, linked list, stack, queue, deque, hash table, min-heap,
+        binary search tree, trie, graph, and union-find (11 structures).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+import datetime as dt
+
 import streamlit as st
 
+import ds_core
+
+ds_core.set_lang("en")
+
 import ui
+
+ui.set_lang("en")
+
 from ds_core import BST, Deque, DynamicArray, Graph, HashTable, LinkedList, MinHeap, Queue, Stack, Trie, UnionFind
 
 ACCENT = "#38bdf8"
 ACCENT2 = "#fbbf24"
-GROUP = "第 3 组"
-SYSTEM = "速达驿站"
-SUBTITLE = "校园快递驿站管理系统 · Campus Parcel Station"
+GROUP = "Group 3"
+SYSTEM = "SwiftStop Parcel"
+SUBTITLE = "Campus Parcel Station Management System"
 
 STATUS = {
-    "pending": ("待取", "#38bdf8"),
-    "notified": ("已通知", "#fbbf24"),
-    "picked": ("已取", "#34d399"),
-    "returned": ("退回", "#fb7185"),
+    "pending": ("Pending", "#38bdf8"),
+    "notified": ("Notified", "#fbbf24"),
+    "picked": ("Picked", "#34d399"),
+    "returned": ("Returned", "#fb7185"),
 }
 
 
@@ -58,20 +67,30 @@ class StationState:
         self.seq = 100014
         self.parcels = HashTable(8)
         self.shelf = DynamicArray(4)
-        self.pick_queue = Queue(8)          # 队列：取件排队
-        self.remind_deque = Deque(8)        # 双端队列：提醒
-        self.overdue_heap = MinHeap()       # 堆：滞留最久
-        self.flow = LinkedList()            # 链表：包裹流水
-        self.undo = Stack()                 # 栈：撤销取件
-        self.name_trie = Trie()             # 字典树：收件人
-        self.weight_bst = BST()             # BST：重量
-        self.route_graph = Graph()          # 图：配送路线
-        self.dorm_groups = UnionFind()      # 并查集：寝室代取组
+        self.pick_queue = Queue(8)          # Queue: pickup line
+        self.remind_deque = Deque(8)        # Deque: reminders
+        self.overdue_heap = MinHeap()       # Min-heap: longest wait
+        self.flow = LinkedList()            # Linked list: parcel activity
+        self.undo = Stack()                 # Stack: undo pickup
+        self.name_trie = Trie()             # Trie: recipients
+        self.weight_bst = BST()             # BST: weights
+        self.route_graph = Graph()          # Graph: delivery routes
+        self.closed_roads: list[tuple[str, str, float]] = []  # roads closed for construction
+        # Care & Send
+        self.nudged = HashTable(16)         # Hash table: pickup code -> day of its last care nudge
+        self.nudge_history: list[dict] = []
+        self.send_queue = Queue(8)          # Circular queue: outbound orders waiting for a courier
+        self.dispatched: list[dict] = []
+        self.gift_heap = MinHeap()          # Min-heap: scheduled gifts, earliest arrival first
+        self.shipped_gifts: list[dict] = []
+        self.out_seq = 0
+        self.gift_seq = 0
+        self.dorm_groups = UnionFind()      # Union-find: pickup groups
         self._seed()
         self._build_graph()
         self._build_groups()
 
-    # -- 种子 -------------------------------------------------------------
+    # -- Seed data ---------------------------------------------------------
     def _seed(self) -> None:
         for z in ["A", "B", "C", "D"]:
             row = DynamicArray(8)
@@ -79,53 +98,53 @@ class StationState:
                 row.append(Cell(z, i))
             self.shelf.append(row)
         rows = [
-            ("张同学", "138****1024", "1号楼 302", "顺丰", 2.4, 20, "A-01", "pending"),
-            ("李同学", "139****2048", "2号楼 105", "中通", 0.8, 20, "A-02", "notified"),
-            ("王同学", "137****3096", "1号楼 508", "京东", 5.2, 19, "A-03", "pending"),
-            ("赵同学", "136****4096", "3号楼 201", "圆通", 1.1, 19, "B-01", "pending"),
-            ("陈同学", "135****5120", "2号楼 407", "顺丰", 3.6, 18, "B-02", "notified"),
-            ("刘同学", "134****6144", "4号楼 101", "韵达", 0.5, 18, "B-03", "pending"),
-            ("孙同学", "133****7168", "1号楼 302", "中通", 8.9, 17, "C-01", "pending"),
-            ("周同学", "132****8192", "3号楼 305", "京东", 12.5, 17, "C-02", "pending"),
-            ("吴同学", "131****9216", "2号楼 105", "顺丰", 1.8, 15, "C-03", "notified"),
-            ("郑同学", "130****0240", "4号楼 206", "圆通", 4.4, 14, "D-01", "pending"),
-            ("冯同学", "188****1264", "1号楼 508", "韵达", 0.9, 13, "D-02", "pending"),
-            ("何同学", "187****2288", "3号楼 201", "中通", 6.7, 12, "D-03", "notified"),
-            ("许同学", "186****3312", "2号楼 407", "京东", 2.2, 18, None, "picked"),
-            ("邓同学", "185****4336", "4号楼 101", "顺丰", 1.4, 16, None, "picked"),
+            ("Alice Chen", "138****1024", "Dorm 1-302", "SF Express", 2.4, 20, "A-01", "pending"),
+            ("Brian Lee", "139****2048", "Dorm 2-105", "ZTO", 0.8, 20, "A-02", "notified"),
+            ("Chloe Wang", "137****3096", "Dorm 1-508", "JD", 5.2, 19, "A-03", "pending"),
+            ("Daniel Zhao", "136****4096", "Dorm 3-201", "YTO", 1.1, 19, "B-01", "pending"),
+            ("Emma Liu", "135****5120", "Dorm 2-407", "SF Express", 3.6, 18, "B-02", "notified"),
+            ("Frank Sun", "134****6144", "Dorm 4-101", "Yunda", 0.5, 18, "B-03", "pending"),
+            ("Grace Zhou", "133****7168", "Dorm 1-302", "ZTO", 8.9, 17, "C-01", "pending"),
+            ("Henry Wu", "132****8192", "Dorm 3-305", "JD", 12.5, 17, "C-02", "pending"),
+            ("Irene Zheng", "131****9216", "Dorm 2-105", "SF Express", 1.8, 15, "C-03", "notified"),
+            ("Jason Feng", "130****0240", "Dorm 4-206", "YTO", 4.4, 14, "D-01", "pending"),
+            ("Karen He", "188****1264", "Dorm 1-508", "Yunda", 0.9, 13, "D-02", "pending"),
+            ("Leo Xu", "187****2288", "Dorm 3-201", "ZTO", 6.7, 12, "D-03", "notified"),
+            ("Mia Deng", "186****3312", "Dorm 2-407", "JD", 2.2, 18, None, "picked"),
+            ("Nina Lin", "185****4336", "Dorm 4-101", "SF Express", 1.4, 16, None, "picked"),
         ]
         for i, (name, phone, dorm, carrier, weight, arrived, cell, status) in enumerate(rows):
             code = str(100001 + i)
             p = Parcel(code, name, phone, dorm, carrier, weight, arrived, cell, status,
                        20 if status == "picked" else None)
             self.parcels.put(code, p)
-            self.name_trie.insert(name, code)
+            self._index_name(name, code)
             self.weight_bst.insert((weight, code), name)
             self.dorm_groups.add(dorm)
-            if status == "pending":
+            if status in ("pending", "notified"):
                 self.overdue_heap.push(arrived, code)
             if cell:
                 self.set_cell(cell, code)
-        self._log("驿站开门，14 件包裹在架", "系统")
+        self._log("Station opened with 14 parcels on the shelves", "System")
 
     def _build_graph(self) -> None:
         edges = [
-            ("驿站", "快递柜", 1), ("驿站", "食堂", 4), ("驿站", "1号楼", 6),
-            ("驿站", "2号楼", 8), ("1号楼", "2号楼", 3), ("2号楼", "3号楼", 4),
-            ("3号楼", "4号楼", 5), ("食堂", "图书馆", 3), ("图书馆", "体育馆", 6),
-            ("4号楼", "东门", 7), ("驿站", "东门", 9), ("食堂", "3号楼", 5),
+            ("Station", "Locker", 1), ("Station", "Cafeteria", 4), ("Station", "Dorm 1", 6),
+            ("Station", "Dorm 2", 8), ("Dorm 1", "Dorm 2", 3), ("Dorm 2", "Dorm 3", 4),
+            ("Dorm 3", "Dorm 4", 5), ("Cafeteria", "Library", 3), ("Library", "Gym", 6),
+            ("Dorm 4", "East Gate", 7), ("Station", "East Gate", 9), ("Cafeteria", "Dorm 3", 5),
         ]
         for a, b, w in edges:
             self.route_graph.add_edge(a, b, w)
 
     def _build_groups(self) -> None:
-        # 同寝室 / 同楼层可以互相代取
-        for a, b in [("1号楼 302", "1号楼 508"), ("2号楼 105", "2号楼 407"),
-                     ("3号楼 201", "3号楼 305"), ("4号楼 101", "4号楼 206")]:
+        # Roommates or neighbours on the same floor can collect for each other.
+        for a, b in [("Dorm 1-302", "Dorm 1-508"), ("Dorm 2-105", "Dorm 2-407"),
+                     ("Dorm 3-201", "Dorm 3-305"), ("Dorm 4-101", "Dorm 4-206")]:
             self.dorm_groups.union(a, b)
 
-    # -- 工具 -------------------------------------------------------------
-    def _log(self, text: str, tag: str = "操作") -> None:
+    # -- Helpers -----------------------------------------------------------
+    def _log(self, text: str, tag: str = "Action") -> None:
         self.flow.append({"day": self.day, "text": text, "tag": tag})
 
     def cells(self) -> list[Cell]:
@@ -151,45 +170,156 @@ class StationState:
     def is_overdue(self, p: Parcel) -> bool:
         return p.status in ("pending", "notified") and self.days_waiting(p) >= 3
 
-    # -- 业务 -------------------------------------------------------------
+    # -- Business rules ----------------------------------------------------
     def add_parcel(self, name: str, phone: str, dorm: str, carrier: str, weight: float) -> tuple[bool, str]:
         cell = self.free_cell()
         if not cell:
-            return False, "货架已满，请先清理滞留包裹"
+            return False, "The shelves are full. Clear overdue parcels before adding more."
         self.seq += 1
         code = str(self.seq)
         p = Parcel(code, name, phone, dorm, carrier, round(weight, 1), self.day, cell.cell_id)
         self.parcels.put(code, p)
-        self.name_trie.insert(name, code)
+        self._index_name(name, code)
         self.weight_bst.insert((p.weight, code), name)
         self.dorm_groups.add(dorm)
         cell.code = code
         self.overdue_heap.push(self.day, code)
-        self._log(f"入库 {code} · {name} · {carrier} · 放到 {cell.cell_id}", "入库")
-        return True, f"入库成功：取件码 {code}，已放到 {cell.cell_id}"
+        self._log(f"Intake {code} · {name} · {carrier} · shelved at {cell.cell_id}", "Intake")
+        return True, f"Intake complete: pickup code {code}, shelved at {cell.cell_id}"
+
+    def _index_name(self, name: str, code: str) -> None:
+        # The trie payload is a list of codes, so two parcels for the same person are both found.
+        codes = self.name_trie.search(name) or []
+        self.name_trie.insert(name, codes + [code])
+
+    def close_road(self, a: str, b: str) -> tuple[bool, str]:
+        w = next((w for u, v, w in self.route_graph.edges() if {u, v} == {a, b}), None)
+        if w is None:
+            return False, f"There is no open road between {a} and {b}"
+        self.route_graph.remove_edge(a, b)
+        self.closed_roads.append((a, b, w))
+        n = len(self.route_graph.components())
+        split = f"; the campus is now split into {n} separate parts" if n > 1 else "; every place can still be reached"
+        self._log(f"Road closed: {a} – {b}", "Route")
+        return True, f"Closed {a} – {b}{split}"
+
+    def reopen_road(self, index: int) -> tuple[bool, str]:
+        if not 0 <= index < len(self.closed_roads):
+            return False, "Choose a closed road to reopen"
+        a, b, w = self.closed_roads.pop(index)
+        self.route_graph.add_edge(a, b, w)
+        self._log(f"Road reopened: {a} – {b}", "Route")
+        return True, f"Reopened {a} – {b}"
+
+    # -- Care & Send -------------------------------------------------------
+    NUDGE_TONES = ("Gentle", "Playful", "Cheerful")
+    SERVICES = ("Same-city express · today", "Standard courier · 2–3 days", "Campus locker drop-off")
+
+    def nudge_text(self, p: Parcel, tone: str) -> str:
+        return {
+            "Gentle": f"Hello {p.name}, your parcel {p.code} is resting at {p.cell}. No rush — we will keep it safe.",
+            "Playful": f"Did you forget me? I am a small box at {p.cell} with your name on it. Come say hello when you can!",
+            "Cheerful": f"Good news, {p.name}! {p.code} is ready at {p.cell}. I would love to go home with you today.",
+        }[tone]
+
+    def send_nudge(self, code: str, tone: str, channel: str) -> tuple[bool, str]:
+        p = self.parcels.get(code)
+        if not p or p.status not in ("pending", "notified"):
+            return False, "This parcel is not waiting for pickup"
+        if tone not in self.NUDGE_TONES:
+            return False, "Choose a tone: Gentle, Playful or Cheerful"
+        if self.nudged.get(code) == self.day:
+            return False, f"{p.name} was already nudged today. One nudge per parcel per day keeps it friendly."
+        self.nudged.put(code, self.day)
+        self.nudge_history.append({"day": self.day, "name": p.name, "code": code, "tone": tone,
+                                   "channel": channel, "text": self.nudge_text(p, tone)})
+        self._log(f"Care message sent to {p.name} ({tone.lower()}, {channel})", "Care")
+        return True, f"{tone} nudge sent to {p.name} via {channel}"
+
+    @staticmethod
+    def delivery_price(service: str, weight: float) -> float:
+        price = 12.0 if service.startswith("Same-city") else 8.0
+        if weight > 5:
+            price += (weight - 5) * 1.5
+        return round(price, 1)
+
+    def book_delivery(self, sender: str, recipient: str, phone: str, address: str,
+                      service: str, weight: float) -> tuple[bool, str]:
+        sender, recipient, address = sender.strip(), recipient.strip(), address.strip()
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        if not sender or not recipient or not address:
+            return False, "Please fill in sender, recipient and address"
+        if not 7 <= len(digits) <= 15 or any(ch not in "0123456789 +-()" for ch in phone):
+            return False, "Enter a valid recipient phone number (7–15 digits)"
+        if service not in self.SERVICES:
+            return False, "Choose a delivery service"
+        if not 0.2 <= weight <= 30:
+            return False, "Weight must be between 0.2 and 30 kg"
+        self.out_seq += 1
+        order = {"id": f"OUT-{self.out_seq:03d}", "sender": sender, "recipient": recipient,
+                 "phone": digits[:3] + "****" + digits[-4:], "address": address, "service": service,
+                 "weight": round(weight, 1), "price": self.delivery_price(service, weight),
+                 "status": "Waiting for courier"}
+        self.send_queue.enqueue(order)
+        self._log(f"Outbound order {order['id']} created for {recipient}", "Send")
+        return True, f"{order['id']} booked · {len(self.send_queue)} waiting for a courier"
+
+    def dispatch_next_order(self) -> tuple[bool, str]:
+        if self.send_queue.is_empty():
+            return False, "No outbound orders are waiting"
+        order = self.send_queue.dequeue()
+        order["status"] = "Courier assigned"
+        self.dispatched.append(order)
+        self._log(f"Courier assigned to {order['id']} for {order['recipient']}", "Send")
+        return True, f"Courier assigned to {order['id']} (first booked, first sent)"
+
+    def schedule_gift(self, occasion: str, bundle: str, recipient: str, address: str,
+                      arrival: dt.date, note: str, today: dt.date) -> tuple[bool, str]:
+        recipient, address = recipient.strip(), address.strip()
+        if not recipient or not address:
+            return False, "Please add recipient and address"
+        if arrival < today:
+            return False, "The arrival date is in the past"
+        if arrival > today + dt.timedelta(days=365):
+            return False, "Gifts can be scheduled up to one year ahead"
+        self.gift_seq += 1
+        gift = {"id": f"GIFT-{self.gift_seq:03d}", "occasion": occasion, "bundle": bundle,
+                "recipient": recipient, "address": address, "date": arrival,
+                "note": note.strip() or "—"}
+        self.gift_heap.push(arrival.toordinal(), gift)
+        self._log(f"Holiday gift {gift['id']} scheduled for {recipient} on {arrival}", "Gift")
+        return True, f"{gift['id']} scheduled to arrive on {arrival}"
+
+    def ship_next_gift(self) -> tuple[bool, str]:
+        if self.gift_heap.is_empty():
+            return False, "No gifts are scheduled"
+        gift = self.gift_heap.pop()
+        self.shipped_gifts.append(gift)
+        self._log(f"Gift {gift['id']} shipped to {gift['recipient']}", "Gift")
+        return True, f"{gift['id']} shipped to {gift['recipient']} (earliest arrival date first)"
 
     def enqueue_pickup(self, code: str) -> tuple[bool, str]:
         p = self.parcels.get(code)
         if not p:
-            return False, "取件码不存在"
+            return False, "Pickup code not found"
         if p.status == "picked":
-            return False, "该包裹已经取走"
+            return False, "This parcel has already been picked up"
         if p.status == "returned":
-            return False, "该包裹已退回，无法取件"
+            return False, "This parcel was returned and cannot be collected"
         for item in self.pick_queue.to_list():
             if item["code"] == code:
-                return False, "该包裹已经在排队"
+                return False, "This parcel is already in the queue"
         self.pick_queue.enqueue({"code": code, "name": p.name, "day": self.day})
-        self._log(f"{p.name} 扫码排队取件（第 {len(self.pick_queue)} 位）", "排队")
-        return True, f"{p.name} 已加入取件队列，前面还有 {len(self.pick_queue) - 1} 人"
+        self._log(f"{p.name} joined the pickup queue (position {len(self.pick_queue)})", "Queue")
+        return True, f"{p.name} joined the pickup queue with {len(self.pick_queue) - 1} ahead"
 
     def serve_pickup(self) -> tuple[bool, str]:
         if self.pick_queue.is_empty():
-            return False, "取件队列为空"
+            return False, "The pickup queue is empty"
         item = self.pick_queue.dequeue()
         p = self.parcels.get(item["code"])
-        if not p or p.status == "picked":
-            return False, "该包裹状态异常，已跳过"
+        if not p or p.status not in ("pending", "notified"):
+            return False, "Unexpected parcel status; this entry was skipped"
         cell_id = p.cell
         prev_status = "notified" if p.status == "notified" else "pending"
         p.status = "picked"
@@ -198,51 +328,52 @@ class StationState:
         if cell_id:
             self.set_cell(cell_id, None)
         self.undo.push({"code": p.code, "cell": cell_id, "prev_status": prev_status})
-        self._log(f"{p.name} 取走 {p.code}，{cell_id or '货架'} 释放", "取件")
-        return True, f"{p.name} 取件成功：《{p.carrier}》{p.code}，{cell_id or ''} 已释放"
+        self._log(f"{p.name} picked up {p.code}; {cell_id or 'shelf'} released", "Pickup")
+        return True, f"{p.name} picked up {p.carrier} parcel {p.code}; {cell_id or ''} released"
 
     def undo_pickup(self) -> tuple[bool, str]:
         if self.undo.is_empty():
-            return False, "没有可撤销的取件"
+            return False, "There is no pickup to undo"
         action = self.undo.pop()
         p = self.parcels.get(action["code"])
         if not p:
-            return False, "包裹不存在"
+            return False, "Parcel not found"
         if p.status != "picked":
-            return False, "该包裹当前不是已取状态"
+            return False, "This parcel is not currently marked as picked up"
         if action["cell"] and self.cell_of(action["cell"]) and self.cell_of(action["cell"]).code is not None:
-            return False, "原货位已被占用，无法撤销"
+            return False, "The original slot is occupied, so the pickup cannot be undone"
         if action["cell"]:
             self.set_cell(action["cell"], p.code)
         p.cell = action["cell"]
         p.status = action["prev_status"]
         p.picked_day = None
         self.overdue_heap.push(p.arrived, p.code)
-        self._log(f"撤销取件：{p.code} 放回 {p.cell}", "撤销")
-        return True, f"已撤销取件，{p.code} 放回 {p.cell}"
+        self._log(f"Pickup undone: {p.code} returned to {p.cell}", "Undo")
+        return True, f"Pickup undone. {p.code} returned to {p.cell}"
 
     def remind(self, code: str, urgent: bool | None = None) -> tuple[bool, str]:
         p = self.parcels.get(code)
         if not p or p.status not in ("pending", "notified"):
-            return False, "该包裹不需要提醒"
+            return False, "This parcel does not need a reminder"
         if urgent is None:
             urgent = self.is_overdue(p)
         p.status = "notified"
         if urgent:
             self.remind_deque.appendleft({"code": code, "name": p.name, "urgent": True})
-            self._log(f"{p.name} 的 {code} 超过 3 天，插入加急提醒队首", "催取")
-            return True, f"{p.name} 的包裹已加急提醒（从队首）"
+            self._log(f"{p.name}'s {code} is over 3 days old; inserted at the front of the urgent queue", "Urgent")
+            return True, f"Urgent reminder queued for {p.name}'s parcel (from the front)"
         self.remind_deque.append({"code": code, "name": p.name, "urgent": False})
-        self._log(f"{p.name} 的 {code} 进入普通提醒队尾", "提醒")
-        return True, f"{p.name} 的包裹已加入普通提醒队列"
+        self._log(f"{p.name}'s {code} joined the back of the regular reminder queue", "Reminder")
+        return True, f"{p.name}'s parcel was added to the regular reminder queue"
 
     def send_reminder(self) -> tuple[bool, str]:
         if self.remind_deque.is_empty():
-            return False, "提醒队列为空"
+            return False, "The reminder queue is empty"
         item = self.remind_deque.popleft()
-        tag = "加急" if item["urgent"] else "普通"
-        self._log(f"已向 {item['name']} 发送{tag}取件提醒", "发送")
-        return True, f"已向 {item['name']} 发送{tag}短信：取件码 {item['code']}"
+        tag = "urgent" if item["urgent"] else "regular"
+        article = "an" if item["urgent"] else "a"
+        self._log(f"Sent {article} {tag} pickup reminder to {item['name']}", "Sent")
+        return True, f"Sent {item['name']} {article} {tag} SMS: pickup code {item['code']}"
 
     def return_oldest(self) -> tuple[bool, str]:
         while not self.overdue_heap.is_empty():
@@ -255,18 +386,19 @@ class StationState:
             p.cell = None
             if cell_id:
                 self.set_cell(cell_id, None)
-            self._log(f"{code} 滞留 {self.days_waiting(p)} 天，退回快递公司，{cell_id} 释放", "退回")
-            return True, f"已退回 {p.name} 的 {code}（滞留 {self.days_waiting(p)} 天）"
-        return False, "没有可退回的滞留包裹"
+            self._log(f"{code} waited {self.days_waiting(p)} days and was returned to the carrier; "
+                      f"{cell_id or 'shelf'} released", "Return")
+            return True, f"Returned {p.name}'s {code} after {self.days_waiting(p)} days"
+        return False, "There are no overdue parcels to return"
 
     def merge_dorms(self, a: str, b: str) -> tuple[bool, str]:
         if self.dorm_groups.union(a, b):
-            self._log(f"代取组合并：{a} ↔ {b}", "代取")
-            return True, f"{a} 与 {b} 已合并为同一个代取组"
-        return False, "两个寝室已经在同一代取组"
+            self._log(f"Pickup groups merged: {a} ↔ {b}", "Group")
+            return True, f"{a} and {b} are now in the same pickup group"
+        return False, "These dorms are already in the same pickup group"
 
     def notify_due(self) -> int:
-        """把超过 3 天未取的包裹自动加入提醒队列（不重复）。"""
+        """Queue reminders for every parcel waiting more than 3 days (no duplicates)."""
         queued = {i["code"] for i in self.remind_deque.to_list()}
         count = 0
         for p in self.pending():
@@ -276,7 +408,6 @@ class StationState:
         return count
 
 
-ui.page_setup(f"{SYSTEM} · {GROUP}", "📦", ACCENT, ACCENT2)
 
 
 def flash(ok: bool, msg: str) -> None:
@@ -303,7 +434,7 @@ def shelf_html(state: StationState) -> str:
         for cell in row:
             p = state.parcels.get(cell.code) if cell.code else None
             color = STATUS[p.status][1] if p else "#475569"
-            label = p.name if p else "空"
+            label = p.name if p else "Empty"
             code = p.code if p else "—"
             cells.append(
                 f"<div style='border:1px solid {color}55;background:{color}10;border-radius:8px;padding:6px 4px;text-align:center'>"
@@ -312,412 +443,568 @@ def shelf_html(state: StationState) -> str:
                 f"<div style='font-size:9px;color:#8fa3b8'>{ui.esc(code)}</div></div>"
             )
         rows.append(f"<div style='display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin-bottom:5px'>{''.join(cells)}</div>")
-    return f"<div class='sl-card'><h4>货架图 · 4 区 × 8 格</h4><p>二维动态数组：每个格子是一个 Cell，code 为空表示空闲。</p><div style='margin-top:10px'>{''.join(rows)}</div></div>"
+    return f"<div class='sl-card'><h4>Shelf map · 4 zones × 8 slots</h4><p>A 2D dynamic array: each slot is a Cell, and an empty code means the slot is free.</p><div style='margin-top:10px'>{''.join(rows)}</div></div>"
 
 
 def sidebar(state: StationState) -> str:
     with st.sidebar:
-        ui.sidebar_brand("03", SYSTEM, f"{GROUP} · 11 种数据结构", ACCENT)
-        pages = ["驿站总览", "入库上架", "取件排队", "提醒中心", "查询中心", "配送路线", "代取分组", "数据结构总览", "关于本组"]
-        page = st.radio("导航", pages, label_visibility="collapsed")
+        ui.sidebar_brand("03", SYSTEM, f"{GROUP} · 11 data structures", ACCENT)
+        pages = ["Station Overview", "Intake & Shelving", "Pickup Queue", "Reminders", "Care & Send", "Search",
+                 "Delivery Route", "Pickup Groups", "Data Structures", "About"]
+        page = st.radio("Navigate", pages, label_visibility="collapsed")
         st.markdown("---")
         ui.sidebar_status([
-            ("当前天数", f"第 {state.day} 天"),
-            ("待取包裹", f"{len(state.pending())} 件"),
-            ("货架占用", f"{sum(1 for c in state.cells() if c.code)} / 32"),
-            ("取件队列", f"{len(state.pick_queue)} 人"),
+            ("Current day", f"Day {state.day}"),
+            ("Awaiting pickup", f"{len(state.pending())} parcels"),
+            ("Shelf occupancy", f"{sum(1 for c in state.cells() if c.code)} / 32"),
+            ("Pickup queue", f"{len(state.pick_queue)} people"),
         ])
         st.markdown("---")
-        if st.button("推进一天 →", use_container_width=True):
+        if st.button("Advance one day →", use_container_width=True):
             state.day += 1
-            state._log(f"时间推进到第 {state.day} 天", "时间")
-            st.toast(f"第 {state.day} 天，记得清理超时包裹")
+            state._log(f"Time advanced to day {state.day}", "Time")
+            st.toast(f"Day {state.day} — remember to clear overdue parcels")
             st.rerun()
-        if st.button("撤销最近取件", use_container_width=True):
+        if st.button("Undo last pickup", use_container_width=True):
             flash(*state.undo_pickup())
         ui.download_json({
             "day": state.day,
             "parcels": [p.__dict__ for p in state.parcels.values()],
             "shelf": {c.cell_id: c.code for c in state.cells()},
-        }, "station-state.json", "导出系统快照")
-        st.markdown('<a href="https://en-g3.algo.43.135.50.247.sslip.io" target="_blank">English edition ↗</a>', unsafe_allow_html=True)
-        st.caption("本地 Streamlit · 数据存于本次会话")
+        }, "station-state.json", "Export system snapshot")
+        st.caption("English edition · local Streamlit · data resets on refresh")
+        # The Chinese edition label is HTML-encoded so this file stays free of Chinese characters.
+        st.markdown('<a href="https://g3.algo.43.135.50.247.sslip.io" target="_blank">&#20013;&#25991;&#29256; ↗</a>',
+                    unsafe_allow_html=True)
     return page
 
 
 # ---------------------------------------------------------------------------
-# 总览
+# Overview
 # ---------------------------------------------------------------------------
 def page_dashboard(state: StationState) -> None:
     ui.hero("GROUP 03 · PARCEL", SYSTEM,
-            "入库、上架、排队、提醒、配送、代取——一个驿站就是一套小型的数据结构交响乐。",
-            ["14 件初始包裹", "32 个货位", "11 种数据结构", f"第 {state.day} 天"])
+            "Intake, shelving, queues, reminders, delivery, and proxy pickup — a parcel station is a small symphony of data structures.",
+            ["14 seed parcels", "32 shelf slots", "11 data structures", f"Day {state.day}"])
     overdue = [p for p in state.pending() if state.is_overdue(p)]
     occupied = sum(1 for c in state.cells() if c.code)
     ui.kpis([
-        {"label": "待取包裹", "value": len(state.pending()), "sub": f"超时 {len(overdue)} 件", "accent": True},
-        {"label": "货架占用", "value": occupied, "unit": "/ 32", "sub": "4 区 × 8 格"},
-        {"label": "取件队列", "value": len(state.pick_queue), "sub": "FIFO"},
-        {"label": "今日入库", "value": sum(1 for p in state.parcels.values() if p.arrived == state.day), "unit": " 件"},
+        {"label": "Awaiting pickup", "value": len(state.pending()), "sub": f"{len(overdue)} overdue", "accent": True},
+        {"label": "Shelf occupancy", "value": occupied, "unit": "/ 32", "sub": "4 zones × 8 slots"},
+        {"label": "Pickup queue", "value": len(state.pick_queue), "sub": "FIFO"},
+        {"label": "Intake today", "value": sum(1 for p in state.parcels.values() if p.arrived == state.day), "unit": " parcels"},
     ])
     left, right = st.columns([1.1, 1])
     with left:
-        ui.section("最近 7 天入库量", "柱状条由大到小排列，便于观察高峰")
-        ui.bar_view([(f"D-{6 - i}", v) for i, v in enumerate([18, 24, 21, 30, 27, 35, 29])], " 件")
+        ui.section("Intake volume · last 7 days", "Bars run high to low so peak days stand out")
+        ui.bar_view([(f"D-{6 - i}", v) for i, v in enumerate([18, 24, 21, 30, 27, 35, 29])], " parcels")
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-        ui.section("滞留最久 TOP 5", "小顶堆按到达日排序，堆顶最久")
+        ui.section("Longest waiting · top 5", "A min-heap ordered by arrival day; the root has waited longest")
         oldest = sorted(state.pending(), key=lambda p: p.arrived)[:5]
-        ui.table_view(["取件码", "收件人", "货位", "滞留"], [
-            (p.code, p.name, p.cell or "-", f"{state.days_waiting(p)} 天") for p in oldest
+        ui.table_view(["Pickup code", "Recipient", "Slot", "Waiting"], [
+            (p.code, p.name, p.cell or "-", f"{state.days_waiting(p)} days") for p in oldest
         ])
     with right:
-        ui.section("超时预警", "超过 3 天标红；可在提醒中心一键催取")
+        ui.section("Overdue alerts", "Anything over 3 days is flagged red; send reminders from the Reminders page")
         for p in overdue[:6]:
-            st.markdown(f"- **{p.code}** {p.name} · {p.cell} · 已 {state.days_waiting(p)} 天")
+            st.markdown(f"- **{p.code}** {p.name} · {p.cell} · waiting {state.days_waiting(p)} days")
         if not overdue:
-            ui.empty("没有超时包裹")
+            ui.empty("No overdue parcels")
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-        ui.section("包裹流水", "单链表按时间追加")
-        ui.log_view([{"time": f"第{e['day']}天", "text": e["text"], "tag": e.get("tag", "")}
+        ui.section("Parcel activity", "A singly linked list, appended in chronological order")
+        ui.log_view([{"time": f"Day {e['day']}", "text": e["text"], "tag": e.get("tag", "")}
                      for e in list(state.flow)[::-1]], 7)
     st.markdown(shelf_html(state), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
-# 入库上架
+# Intake and shelving
 # ---------------------------------------------------------------------------
 def page_intake(state: StationState) -> None:
-    ui.hero("INTAKE", "入库上架", "扫描快递单 → 哈希表登记 → 字典树/BST 建索引 → 动态数组找空位 → 堆里排队催取。",
+    ui.hero("INTAKE", "Intake & Shelving",
+            "Scan the label → register in a hash table → index by trie and BST → find a free slot in the dynamic array → queue reminders in the heap.",
             ["HashTable", "Trie", "BST", "DynamicArray", "MinHeap"])
     c1, c2 = st.columns([1, 1.2])
     with c1:
-        ui.section("新包裹入库", "自动分配第一个空闲货位")
+        ui.section("New parcel intake", "Automatically assigns the first free shelf slot")
         with st.form("intake"):
-            name = st.text_input("收件人", "林同学")
-            phone = st.text_input("手机号", "139****7788")
-            dorm = st.text_input("寝室", "2号楼 302")
-            carrier = st.selectbox("快递公司", ["顺丰", "中通", "圆通", "京东", "韵达"])
-            weight = st.number_input("重量（kg）", 0.1, 30.0, 2.0, step=0.1)
-            go = st.form_submit_button("入库并上架", type="primary", use_container_width=True)
+            name = st.text_input("Recipient", "Ava Patel")
+            phone = st.text_input("Phone", "139****7788")
+            dorm = st.text_input("Dorm", "Dorm 2-302")
+            carrier = st.selectbox("Carrier", ["SF Express", "ZTO", "YTO", "JD", "Yunda"])
+            weight = st.number_input("Weight (kg)", 0.1, 30.0, 2.0, step=0.1)
+            go = st.form_submit_button("Add to shelves", type="primary", use_container_width=True)
         if go:
             if not name.strip() or not dorm.strip():
-                st.error("收件人和寝室不能为空")
+                st.error("Recipient and dorm are required")
             else:
                 flash(*state.add_parcel(name.strip(), phone, dorm.strip(), carrier, float(weight)))
     with c2:
-        ui.section("货架分配策略", "第一个空闲格子；O(32) 线性扫描")
+        ui.section("Shelf allocation strategy", "First free slot; O(32) linear scan")
         free = [c for c in state.cells() if c.code is None]
         ui.kpis([
-            {"label": "空闲货位", "value": len(free), "accent": True},
-            {"label": "A 区", "value": sum(1 for c in free if c.zone == "A")},
-            {"label": "B 区", "value": sum(1 for c in free if c.zone == "B")},
-            {"label": "C/D 区", "value": sum(1 for c in free if c.zone in ("C", "D"))},
+            {"label": "Free slots", "value": len(free), "accent": True},
+            {"label": "Zone A", "value": sum(1 for c in free if c.zone == "A")},
+            {"label": "Zone B", "value": sum(1 for c in free if c.zone == "B")},
+            {"label": "Zones C/D", "value": sum(1 for c in free if c.zone in ("C", "D"))},
         ])
-        st.caption("如果要改成“按重量分区”，只需要修改 free_cell() 的选择规则，不用动其他业务。")
+        st.caption("To switch to weight-based zoning, change the selection rule in free_cell(); no other business logic needs to change.")
     st.markdown(shelf_html(state), unsafe_allow_html=True)
-    ui.section("在架包裹", f"{len(state.pending())} 件")
+    ui.section("Parcels on shelves", f"{len(state.pending())} parcels")
     rows = []
     for p in sorted(state.pending(), key=lambda p: p.arrived):
         rows.append((p.code, p.name, p.dorm, p.carrier, f"{p.weight} kg", p.cell or "-", STATUS[p.status][0],
-                     f"{state.days_waiting(p)} 天"))
-    ui.table_view(["取件码", "收件人", "寝室", "快递", "重量", "货位", "状态", "在架"], rows)
+                     f"{state.days_waiting(p)} days"))
+    ui.table_view(["Pickup code", "Recipient", "Dorm", "Carrier", "Weight", "Slot", "Status", "On shelf"], rows)
 
 
 # ---------------------------------------------------------------------------
-# 取件排队
+# Pickup queue
 # ---------------------------------------------------------------------------
 def page_pickup(state: StationState) -> None:
-    ui.hero("PICKUP", "取件排队", "同学扫码进队，柜台从队头叫号；取走后货位立刻释放，栈里留一次撤销机会。",
+    ui.hero("PICKUP", "Pickup Queue",
+            "Students scan in to join the line and the desk serves from the front; the slot is freed immediately, with one undo kept on the stack.",
             ["Queue", "Stack", "HashTable", "DynamicArray"])
     ui.kpis([
-        {"label": "排队人数", "value": len(state.pick_queue), "accent": True},
-        {"label": "待取包裹", "value": len(state.pending())},
-        {"label": "今日已取", "value": sum(1 for p in state.parcels.values() if p.picked_day == state.day)},
-        {"label": "可撤销操作", "value": len(state.undo)},
+        {"label": "In queue", "value": len(state.pick_queue), "accent": True},
+        {"label": "Awaiting pickup", "value": len(state.pending())},
+        {"label": "Picked up today", "value": sum(1 for p in state.parcels.values() if p.picked_day == state.day)},
+        {"label": "Undo available", "value": len(state.undo)},
     ])
     c1, c2 = st.columns(2)
     with c1:
-        ui.section("扫码加入队列", "先到先服务，不允许插队")
+        ui.section("Scan into the queue", "First come, first served — no cutting in line")
         with st.form("enqueue"):
-            code = st.text_input("取件码", "100003")
-            go = st.form_submit_button("加入取件队列", type="primary", use_container_width=True)
+            code = st.text_input("Pickup code", "100003")
+            go = st.form_submit_button("Join pickup queue", type="primary", use_container_width=True)
         if go:
             flash(*state.enqueue_pickup(code.strip()))
     with c2:
-        ui.section("柜台叫号", "从队头 dequeue，核验后标记已取")
-        if st.button("叫下一位取件", type="primary", use_container_width=True):
+        ui.section("Desk counter", "Dequeue from the front, verify, then mark as picked up")
+        if st.button("Call next pickup", type="primary", use_container_width=True):
             flash(*state.serve_pickup())
-        st.caption("如果队头包裹已取走，会自动跳过并报告异常。")
+        st.caption("If the parcel at the front was already collected, it is skipped automatically and reported as an anomaly.")
 
-    ui.section("当前取件队列", "循环队列 · 队头先服务")
+    ui.section("Current pickup queue", "Circular queue · the front of the line is served first")
     q = state.pick_queue.to_list()
     if q:
         ui.queue_html([f"{i['name']} · {i['code']}" for i in q])
     else:
-        ui.empty("队列为空")
+        ui.empty("The queue is empty")
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    ui.section("操作记录", "每次取件都会压栈，可撤销最近一次")
-    ui.log_view([{"time": f"第{e['day']}天", "text": e["text"], "tag": e.get("tag", "")}
+    ui.section("Activity log", "Every pickup is pushed onto the stack for a one-step undo")
+    ui.log_view([{"time": f"Day {e['day']}", "text": e["text"], "tag": e.get("tag", "")}
                  for e in list(state.flow)[::-1]], 8)
-    with st.expander("查看代码：取件时哪些结构同时变化"):
+    with st.expander("See the code: what changes during a pickup"):
         st.code(
-            """item = pick_queue.dequeue()      # 队列：队头出队
-p = parcels.get(item["code"])     # 哈希：O(1) 找到包裹
+            """item = pick_queue.dequeue()      # Queue: remove from the front
+p = parcels.get(item["code"])     # Hash: O(1) parcel lookup
 p.status = "picked"
-set_cell(p.cell, None)            # 数组：释放货位
-undo.push({...})                  # 栈：记录可撤销操作
-flow.append(...)                  # 链表：追加流水""",
+set_cell(p.cell, None)            # Array: free the shelf slot
+undo.push({...})                  # Stack: record an undoable action
+flow.append(...)                  # Linked list: append to the log""",
             language="python",
         )
 
 
 # ---------------------------------------------------------------------------
-# 提醒中心
+# Reminders
 # ---------------------------------------------------------------------------
 def page_remind(state: StationState) -> None:
-    ui.hero("REMINDERS", "提醒中心", "超时包裹从左侧加急、普通包裹从右侧排队；堆顶永远是滞留最久的那一件。",
+    ui.hero("REMINDERS", "Reminders",
+            "Overdue parcels enter from the left as urgent, regular ones queue on the right, and the heap root is always the parcel that has waited longest.",
             ["Deque", "MinHeap", "Queue"])
     overdue = [p for p in state.pending() if state.is_overdue(p)]
     ui.kpis([
-        {"label": "提醒队列", "value": len(state.remind_deque), "accent": True},
-        {"label": "超时包裹", "value": len(overdue)},
-        {"label": "最久滞留", "value": max((state.days_waiting(p) for p in state.pending()), default=0), "unit": " 天"},
-        {"label": "已退回", "value": sum(1 for p in state.parcels.values() if p.status == "returned")},
+        {"label": "Reminder queue", "value": len(state.remind_deque), "accent": True},
+        {"label": "Overdue parcels", "value": len(overdue)},
+        {"label": "Longest wait", "value": max((state.days_waiting(p) for p in state.pending()), default=0), "unit": " days"},
+        {"label": "Returned", "value": sum(1 for p in state.parcels.values() if p.status == "returned")},
     ])
     c1, c2 = st.columns(2)
     with c1:
-        ui.section("手动加入提醒", "超时自动走左侧加急")
+        ui.section("Add a reminder manually", "Overdue parcels automatically take the urgent (left) end")
         with st.form("remind"):
-            code = st.text_input("取件码", overdue[0].code if overdue else "100003")
-            urgent = st.checkbox("加急（从队首插入）", value=True)
-            go = st.form_submit_button("加入提醒队列", type="primary", use_container_width=True)
+            code = st.text_input("Pickup code", overdue[0].code if overdue else "100003")
+            urgent = st.checkbox("Urgent (insert at the front)", value=True)
+            go = st.form_submit_button("Add to reminder queue", type="primary", use_container_width=True)
         if go:
             flash(*state.remind(code.strip(), urgent))
-        if st.button("一键扫描超时包裹", use_container_width=True):
+        if st.button("Scan for overdue parcels", use_container_width=True):
             n = state.notify_due()
-            flash(n > 0, f"已把 {n} 件超时包裹加入加急提醒")
+            flash(n > 0, f"Queued {n} overdue {'parcel' if n == 1 else 'parcels'} "
+                         f"as {'an urgent reminder' if n == 1 else 'urgent reminders'}")
     with c2:
-        ui.section("发送提醒", "从双端队列左端取出（加急优先）")
-        if st.button("发送下一条提醒", type="primary", use_container_width=True):
+        ui.section("Send reminders", "Pop from the left of the deque (urgent first)")
+        if st.button("Send next reminder", type="primary", use_container_width=True):
             flash(*state.send_reminder())
-        if st.button("退回最久未取件", use_container_width=True):
+        if st.button("Return longest-waiting parcel", use_container_width=True):
             flash(*state.return_oldest())
-        st.caption("退回会真正从堆中弹出堆顶，并释放对应货位。")
-    ui.section("提醒队列", "左端 = 加急，右端 = 普通")
-    st.markdown(ui.deque_html([f"{i['name']}·{i['code']}{'!' if i['urgent'] else ''}"
+        st.caption("Returning pops the heap root for real and frees the matching shelf slot.")
+    ui.section("Reminder queue", "Left = urgent · right = regular")
+    st.markdown(ui.deque_html([f"{i['name']} · {i['code']}{'!' if i['urgent'] else ''}"
                                for i in state.remind_deque.to_list()]), unsafe_allow_html=True)
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-    ui.section("滞留堆", "按到达日从小到大；堆顶最久")
+    ui.section("Overdue heap", "Ordered by arrival day ascending; the root has waited longest")
     items = [(pr, f"{code} {state.parcels.get(code).name}")
              for pr, code in state.overdue_heap.to_list()
              if state.parcels.get(code) and state.parcels.get(code).status in ("pending", "notified")]
-    st.markdown(ui.heap_html(items[:15], priority_fmt="第{}天"), unsafe_allow_html=True)
-    st.caption("已取走 / 已退回的包裹可能还留在堆里（lazy deletion），pop 时用状态过滤。")
+    st.markdown(ui.heap_html(items[:15], priority_fmt="Day {}"), unsafe_allow_html=True)
+    st.caption("Picked-up and returned parcels may still sit in the heap (lazy deletion); status is checked when popping.")
 
 
 # ---------------------------------------------------------------------------
-# 查询中心
+# Search
 # ---------------------------------------------------------------------------
 def page_query(state: StationState) -> None:
-    ui.hero("SEARCH", "查询中心", "三种索引各司其职：哈希查码、字典树查人、BST 查重量区间。",
+    ui.hero("SEARCH", "Search",
+            "Three indexes, three jobs: hash for codes, trie for names, BST for weight ranges.",
             ["HashTable", "Trie", "BST", "LinkedList"])
-    tab1, tab2, tab3 = st.tabs(["取件码 · 哈希", "收件人 · 字典树", "重量区间 · BST"])
+    tab1, tab2, tab3 = st.tabs(["Code · hash", "Recipient · trie", "Weight range · BST"])
     with tab1:
-        code = st.text_input("取件码", "100007", key="q_code")
+        code = st.text_input("Pickup code", "100007", key="q_code")
         p = state.parcels.get(code)
         if p:
             ui.card(
                 f"<h4>{ui.esc(p.name)} · {ui.esc(p.carrier)}</h4>"
-                f"<p>取件码 {p.code} · {p.dorm} · {p.weight} kg · 第 {p.arrived} 天到达 · "
-                f"货位 {p.cell or '已释放'} · 状态 {STATUS[p.status][0]}</p>"
+                f"<p>Pickup code {p.code} · {p.dorm} · {p.weight} kg · arrived day {p.arrived} · "
+                f"slot {p.cell or 'released'} · status {STATUS[p.status][0]}</p>"
             )
-            ui.section("该包裹的流水", "从单链表中筛选")
-            ui.log_view([{"time": f"第{e['day']}天", "text": e["text"], "tag": e.get("tag", "")}
+            ui.section("Activity for this parcel", "Filtered from the singly linked list")
+            ui.log_view([{"time": f"Day {e['day']}", "text": e["text"], "tag": e.get("tag", "")}
                          for e in state.flow if p.code in e["text"]][::-1], 8)
         else:
-            ui.empty("没有这个取件码")
+            ui.empty("No parcel found for that pickup code")
     with tab2:
-        prefix = st.text_input("收件人姓氏 / 名字前缀", "张", key="q_name")
+        prefix = st.text_input("Recipient name or prefix", "Alice", key="q_name")
         hits = state.name_trie.autocomplete(prefix, 8)
-        st.caption(f"命中 {len(hits)} 人；字典树按字符逐层下降。")
-        for name, code in hits:
-            p = state.parcels.get(code)
-            st.markdown(f"- **{name}** · {code} · {p.dorm if p else ''} · {STATUS[p.status][0] if p else ''}")
+        st.caption(f"{len(hits)} matching {'recipient' if len(hits) == 1 else 'recipients'}; the trie descends one character at a time.")
+        for name, codes in hits:
+            for code in codes:
+                p = state.parcels.get(code)
+                st.markdown(f"- **{name}** · {code} · {p.dorm if p else ''} · {STATUS[p.status][0] if p else ''}")
         if not hits:
-            ui.empty("没有匹配的收件人")
-        ui.visual_label("收件人词条")
+            ui.empty("No matching recipients")
+        ui.visual_label("Recipient entries")
         st.markdown(ui.trie_html(state.name_trie.words(30), prefix), unsafe_allow_html=True)
     with tab3:
-        lo, hi = st.slider("重量区间（kg）", 0.0, 20.0, (2.0, 8.0), step=0.5, key="q_weight")
+        lo, hi = st.slider("Weight range (kg)", 0.0, 20.0, (2.0, 8.0), step=0.5, key="q_weight")
         results = state.weight_bst.range_query((lo, ""), (hi, "\uffff"))
-        st.caption(f"BST 命中 {len(results)} 件；树高 {state.weight_bst.height()}。")
-        ui.table_view(["收件人", "重量", "取件码"], [
+        st.caption(f"BST returned {len(results)} {'parcel' if len(results) == 1 else 'parcels'}; tree height {state.weight_bst.height()}.")
+        ui.table_view(["Recipient", "Weight", "Pickup code"], [
             (name, f"{key[0]} kg", key[1]) for key, name in results
         ])
-        ui.visual_label("重量 BST · 键 = (重量, 取件码)")
+        ui.visual_label("Weight BST · key = (weight, pickup code)")
         st.markdown(ui.bst_html(state.weight_bst.levels()), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
-# 配送路线
+# Delivery route
 # ---------------------------------------------------------------------------
 def page_route(state: StationState) -> None:
-    ui.hero("DELIVERY", "配送路线", "驿站、宿舍楼和食堂构成一张带权图；Dijkstra 找出步行最短的送达路线。",
+    ui.hero("DELIVERY", "Delivery Route",
+            "The station, dorms, and cafeteria form a weighted graph; Dijkstra finds the shortest walking route.",
             ["Graph", "Dijkstra", "BFS", "UnionFind"])
     nodes = state.route_graph.nodes()
     c1, c2 = st.columns(2)
     with c1:
-        start = st.selectbox("起点", nodes, index=0, key="r_start")
+        start = st.selectbox("Start", nodes, index=0, key="r_start")
     with c2:
-        target = st.selectbox("终点", nodes, index=3, key="r_target")
-    if st.button("规划配送路线", type="primary", use_container_width=True):
+        target = st.selectbox("Destination", nodes, index=3, key="r_target")
+    if st.button("Plan delivery route", type="primary", use_container_width=True):
         path, dist = state.route_graph.shortest_path(start, target)
         st.session_state.g3_path = (path, dist)
     path, dist = st.session_state.get("g3_path", ([], 0))
     if path:
-        st.success(f"最短路线：{' → '.join(path)}，约 {dist:g} 分钟")
-    ui.visual_label("校园配送图")
+        st.success(f"Shortest route: {' → '.join(path)} · about {dist:g} minutes")
+    elif "g3_path" in st.session_state:
+        st.warning(f"No route from {start} to {target}: a closed road has cut it off")
+    ui.visual_label("Campus delivery graph")
     st.markdown(ui.graph_html(nodes, state.route_graph.edges(), highlight_nodes=[start, target], path=path),
                 unsafe_allow_html=True)
-    ui.section("连通性检查", "如果校园施工封路，图可能被切成两个连通分量")
+    ui.section("Road closures", "Close a road for construction and watch the shortest route and the components change")
+    edges = state.route_graph.edges()
+    c3, c4 = st.columns(2)
+    with c3:
+        if edges:
+            i = st.selectbox("Open roads", range(len(edges)), key="r_close",
+                             format_func=lambda k: f"{edges[k][0]} – {edges[k][1]} · {edges[k][2]:g} min")
+            if st.button("Close this road", use_container_width=True):
+                st.session_state.pop("g3_path", None)
+                flash(*state.close_road(edges[i][0], edges[i][1]))
+    with c4:
+        closed = state.closed_roads
+        if closed:
+            j = st.selectbox("Closed roads", range(len(closed)), key="r_open",
+                             format_func=lambda k: f"{closed[k][0]} – {closed[k][1]} · {closed[k][2]:g} min")
+            if st.button("Reopen this road", use_container_width=True):
+                st.session_state.pop("g3_path", None)
+                flash(*state.reopen_road(j))
+        else:
+            ui.empty("No roads are closed")
+    ui.section("Connectivity check", "If construction closes a road, the graph can split into separate components")
     comps = state.route_graph.components()
-    ui.table_view(["分量", "节点"], [(f"#{i + 1}", "、".join(c)) for i, c in enumerate(comps)])
+    ui.table_view(["Component", "Nodes"], [(f"#{i + 1}", ", ".join(c)) for i, c in enumerate(comps)])
 
 
 # ---------------------------------------------------------------------------
-# 代取分组
+# Pickup groups
 # ---------------------------------------------------------------------------
 def page_groups(state: StationState) -> None:
-    ui.hero("PICKUP GROUPS", "代取分组", "室友、同楼层可以互相代取。并查集把“能代取”的关系合并成组。",
+    ui.hero("PICKUP GROUPS", "Pickup Groups",
+            "Roommates and neighbours on the same floor can collect for each other. Union-find merges every 'can collect for me' pair into a group.",
             ["UnionFind", "Path Compression"])
     ui.kpis([
-        {"label": "寝室数", "value": len(state.dorm_groups)},
-        {"label": "代取组", "value": state.dorm_groups.group_count, "accent": True},
-        {"label": "最大组", "value": max((len(v) for v in state.dorm_groups.groups().values()), default=0), "unit": " 个寝室"},
-        {"label": "合并次数", "value": sum(1 for e in state.flow if e.get("tag") == "代取")},
+        {"label": "Dorms", "value": len(state.dorm_groups)},
+        {"label": "Pickup groups", "value": state.dorm_groups.group_count, "accent": True},
+        {"label": "Largest group", "value": max((len(v) for v in state.dorm_groups.groups().values()), default=0), "unit": " dorms"},
+        {"label": "Merges", "value": sum(1 for e in state.flow if e.get("tag") == "Group")},
     ])
-    ui.section("当前代取组", "同组内任意一人可代取")
+    ui.section("Current pickup groups", "Any member of a group can collect for the others")
     st.markdown(ui.union_html(state.dorm_groups.groups()), unsafe_allow_html=True)
     dorms = sorted(state.dorm_groups.parent.keys())
     c1, c2, c3 = st.columns([2, 2, 1])
     with c1:
-        a = st.selectbox("寝室 A", dorms, key="g_a")
+        a = st.selectbox("Dorm A", dorms, key="g_a")
     with c2:
-        b = st.selectbox("寝室 B", dorms, index=1, key="g_b")
+        b = st.selectbox("Dorm B", dorms, index=1, key="g_b")
     with c3:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        if st.button("合并代取组", type="primary", use_container_width=True):
+        if st.button("Merge pickup groups", type="primary", use_container_width=True):
             flash(*state.merge_dorms(a, b))
     st.caption(f"connected({a}, {b}) = {state.dorm_groups.connected(a, b)}")
-    ui.note("并查集只支持合并，不支持拆分。如果业务需要“解除代取关系”，就要换用图或带删除的并查集变体——这是本组可以继续研究的扩展点。")
+    ui.note("Union-find supports merging but not splitting. If the station ever needs to dissolve a pickup relationship, "
+            "it would have to use a graph or a union-find variant with deletion — a natural extension for this group to explore.",
+            title="Design note")
 
 
 # ---------------------------------------------------------------------------
-# 结构总览
+# Data structures
 # ---------------------------------------------------------------------------
 def page_structures(state: StationState) -> None:
-    ui.hero("DATA STRUCTURES", "11 种数据结构，一次看全", "从货架到路线，每一块都能在业务里找到对应操作。",
+    ui.hero("DATA STRUCTURES", "11 data structures at a glance",
+            "From the shelf to the delivery route, every structure maps to a real station operation.",
             ["Array", "Linked List", "Stack", "Queue", "Deque", "Hash", "Heap", "BST", "Trie", "Graph", "Union-Find"])
-    with st.expander("① 动态数组 · 货架 4×8", expanded=True):
-        st.markdown(ui.array_html([f"{c.cell_id}:{c.code or '空'}" for c in state.cells()], max_cells=16),
+    with st.expander("① Dynamic array · 4×8 shelf", expanded=True):
+        st.markdown(ui.array_html([f"{c.cell_id}:{c.code or 'free'}" for c in state.cells()], max_cells=16),
                     unsafe_allow_html=True)
-        st.caption(f"外层 4 排，内层 8 格；size={len(state.shelf)}，每排 capacity={state.shelf[0].capacity}")
-    with st.expander("② 单链表 · 包裹流水"):
-        st.markdown(ui.linked_html([f"第{e['day']}天 {e['text']}" for e in list(state.flow)[-5:]]),
+        st.caption(f"4 outer rows with 8 slots each; size={len(state.shelf)}, capacity per row={state.shelf[0].capacity}")
+    with st.expander("② Singly linked list · parcel activity"):
+        st.markdown(ui.linked_html([f"Day {e['day']} {e['text']}" for e in list(state.flow)[-5:]]),
                     unsafe_allow_html=True)
-    with st.expander("③ 栈 · 撤销取件"):
-        st.markdown(ui.stack_html([f"取件 {a['code']}" for a in state.undo.to_list()]), unsafe_allow_html=True)
-    with st.expander("④ 队列 · 取件排队"):
-        st.markdown(ui.queue_html([f"{i['name']}·{i['code']}" for i in state.pick_queue.to_list()]),
+    with st.expander("③ Stack · undo pickup"):
+        st.markdown(ui.stack_html([f"Pickup {a['code']}" for a in state.undo.to_list()]), unsafe_allow_html=True)
+    with st.expander("④ Queue · pickup line"):
+        st.markdown(ui.queue_html([f"{i['name']} · {i['code']}" for i in state.pick_queue.to_list()]),
                     unsafe_allow_html=True)
         st.caption(f"size={len(state.pick_queue)} · capacity={state.pick_queue.capacity}")
-    with st.expander("⑤ 双端队列 · 提醒"):
+    with st.expander("⑤ Deque · reminders"):
         st.markdown(ui.deque_html([f"{i['name']}{'!' if i['urgent'] else ''}" for i in state.remind_deque.to_list()]),
                     unsafe_allow_html=True)
-    with st.expander("⑥ 哈希表 · 取件码索引"):
+    with st.expander("⑥ Hash table · pickup-code index"):
         st.markdown(ui.hash_html(state.parcels.buckets(), 12), unsafe_allow_html=True)
-        st.caption(f"{len(state.parcels)} 件 · {state.parcels.capacity} 桶 · 负载因子 {state.parcels.load_factor:.2f}")
-    with st.expander("⑦ 小顶堆 · 滞留最久"):
+        st.caption(f"{len(state.parcels)} parcels · {state.parcels.capacity} buckets · load factor {state.parcels.load_factor:.2f}")
+    with st.expander("⑦ Min-heap · longest wait"):
         st.markdown(ui.heap_html([(p.arrived, f"{p.code} {p.name}") for p in state.pending()][:15],
-                                 priority_fmt="第{}天"), unsafe_allow_html=True)
-    with st.expander("⑧ 二叉搜索树 · 重量索引"):
+                                 priority_fmt="Day {}"), unsafe_allow_html=True)
+    with st.expander("⑧ Binary search tree · weight index"):
         st.markdown(ui.bst_html(state.weight_bst.levels()), unsafe_allow_html=True)
-        st.caption(f"树高 {state.weight_bst.height()}")
-    with st.expander("⑨ 字典树 · 收件人"):
+        st.caption(f"Tree height {state.weight_bst.height()}")
+    with st.expander("⑨ Trie · recipients"):
         st.markdown(ui.trie_html(state.name_trie.words(30), ""), unsafe_allow_html=True)
-    with st.expander("⑩ 图 · 校园配送"):
+    with st.expander("⑩ Graph · campus delivery"):
         st.markdown(ui.graph_html(state.route_graph.nodes(), state.route_graph.edges()), unsafe_allow_html=True)
-    with st.expander("⑪ 并查集 · 代取组"):
+    with st.expander("⑪ Union-find · pickup groups"):
         st.markdown(ui.union_html(state.dorm_groups.groups()), unsafe_allow_html=True)
 
 
 ROLES = [
-    ("组长 / 项目经理", "排期、整合、演示组织", "计划 + 周报 + 答辩"),
-    ("线性结构负责人", "数组、链表、栈、队列、双端队列", "ds_core.py 前 5 类 + 测试"),
-    ("查找结构负责人", "哈希表、堆、BST", "ds_core.py 中 3 类 + 测试"),
-    ("非线性结构负责人", "字典树、图、并查集", "ds_core.py 后 3 类 + 测试"),
-    ("驿站业务工程师", "入库、上架、取件、退回", "业务函数 + 流程图"),
-    ("界面工程师", "货架图、队列、提醒面板", "ui 组件 + 截图"),
-    ("数据工程师", "种子包裹、状态一致性、导出", "seed + 导出"),
-    ("测试工程师", "货架满、重复取件、撤销冲突", "tests/ + 缺陷清单"),
-    ("部署工程师", "本地运行、依赖、演示环境", "启动脚本 + 部署记录"),
-    ("文档 / 演示", "README、手册、PPT", "文档 + 8 分钟演示"),
+    ("Team lead / project manager", "Scheduling, integration, demo coordination", "Plan + weekly reports + final defense"),
+    ("Linear structures lead", "Array, linked list, stack, queue, deque", "First 5 classes in ds_core.py + tests"),
+    ("Search structures lead", "Hash table, heap, BST", "Next 3 classes in ds_core.py + tests"),
+    ("Non-linear structures lead", "Trie, graph, union-find", "Last 3 classes in ds_core.py + tests"),
+    ("Station operations engineer", "Intake, shelving, pickup, returns", "Business functions + flow diagrams"),
+    ("UI engineer", "Shelf map, queue, reminder panels", "UI components + screenshots"),
+    ("Data engineer", "Seed parcels, state consistency, export", "Seed data + export"),
+    ("QA engineer", "Full shelves, duplicate pickups, undo conflicts", "tests/ + defect log"),
+    ("Deployment engineer", "Local run, dependencies, demo environment", "Launch scripts + deployment notes"),
+    ("Docs / demo", "README, handbook, slides", "Documentation + 8-minute demo"),
 ]
 
 MAP = [
-    ("动态数组", "shelf", "4×8 货架"),
-    ("单链表", "flow", "包裹流水"),
-    ("栈", "undo", "撤销取件"),
-    ("队列", "pick_queue", "取件排队 FIFO"),
-    ("双端队列", "remind_deque", "加急左插 / 普通右插"),
-    ("哈希表", "parcels", "取件码 → 包裹"),
-    ("小顶堆", "overdue_heap", "滞留最久优先退回"),
-    ("BST", "weight_bst", "重量区间查询"),
-    ("字典树", "name_trie", "收件人前缀搜索"),
-    ("图", "route_graph", "校园配送最短路"),
-    ("并查集", "dorm_groups", "寝室代取组"),
+    ("Dynamic array", "shelf", "4×8 shelf"),
+    ("Singly linked list", "flow", "Parcel activity log"),
+    ("Stack", "undo", "Undo pickup"),
+    ("Queue", "pick_queue, send_queue", "FIFO pickup line; outbound orders waiting for a courier"),
+    ("Deque", "remind_deque", "Urgent at the front / regular at the back"),
+    ("Hash table", "parcels, nudged", "Pickup code → parcel; one care nudge per parcel per day"),
+    ("Min-heap", "overdue_heap, gift_heap", "Return the longest-waiting parcel first; ship the earliest gift first"),
+    ("BST", "weight_bst", "Weight range queries"),
+    ("Trie", "name_trie", "Recipient prefix search (a list of codes per name)"),
+    ("Graph", "route_graph", "Shortest campus delivery route; road closures"),
+    ("Union-find", "dorm_groups", "Dorm pickup groups"),
 ]
 
 
 def page_about(state: StationState) -> None:
-    ui.hero("GROUP 03 · PLAYBOOK", "关于本组", "一个驿站，10 个角色。先让包裹跑起来，再让结构说话。",
-            ["8–10 人", "4 周迭代", "可本地部署"])
-    ui.section("角色分工", "8 人组把文档并入组长；9 人组把部署并入测试")
-    ui.table_view(["角色", "职责", "交付物"], ROLES)
-    ui.section("数据结构映射", "答辩抽查表")
-    ui.table_view(["结构", "代码位置", "业务用途"], MAP)
-    ui.section("四周迭代", "")
-    ui.table_view(["周次", "目标", "验收信号"], [
-        ("第 1 周", "跑通、读代码、认领角色", "每人能演示一次入库和取件"),
-        ("第 2 周", "入库→排队→取件→撤销闭环", "主流程 5 次无报错"),
-        ("第 3 周", "提醒 / 查询 / 路线 / 代取", "边界用例通过"),
-        ("第 4 周", "打磨、文档、演示", "8 分钟答辩"),
+    ui.hero("GROUP 03 · PLAYBOOK", "About Group 3",
+            f"{SUBTITLE} — one station, ten roles. Get the parcels moving first, then let the data structures do the talking.",
+            ["8–10 people", "4 weekly sprints", "Runs locally"])
+    ui.section("Roles & responsibilities", "In an 8-person team, docs merge into the lead role; in a 9-person team, deployment merges into QA")
+    ui.table_view(["Role", "Responsibilities", "Deliverable"], ROLES)
+    ui.section("Data structure map", "Defense spot-check sheet")
+    ui.table_view(["Structure", "Where in the code", "Station use case"], MAP)
+    ui.section("Four-week iteration", "")
+    ui.table_view(["Week", "Goal", "Acceptance signal"], [
+        ("Week 1", "Get it running, read the code, claim roles", "Everyone can demo intake and pickup once"),
+        ("Week 2", "Close the loop: intake → queue → pickup → undo", "Main flow runs 5 times without errors"),
+        ("Week 3", "Reminders / search / routes / proxy pickup", "Edge cases pass"),
+        ("Week 4", "Polish, document, demo", "8-minute defense"),
     ])
-    st.info("本地运行：pip install -r requirements.txt && streamlit run app.py")
+    st.info("Run locally: pip install -r requirements.txt && python run.py 3 (or double-click START-windows.bat and choose 3)")
+
+
+# ---------------------------------------------------------------------------
+# Page: Care & Send
+# ---------------------------------------------------------------------------
+def page_care(state: StationState) -> None:
+    ui.hero(
+        "GROUP 03 · CARE & SEND",
+        "Messages, Mailing & Holiday Gifts",
+        "A parcel is a small relationship. Send a warm pickup nudge, book a same-city courier, or schedule a holiday gift that ships itself.",
+        ["HashTable", "Queue", "MinHeap"],
+    )
+    tab_msg, tab_send, tab_gift = st.tabs(["A Little Nudge", "Send a Parcel", "Holiday Gift Studio"])
+    with tab_msg:
+        care_nudges(state)
+    with tab_send:
+        care_send(state)
+    with tab_gift:
+        care_gifts(state)
+
+
+def care_nudges(state: StationState) -> None:
+    st.markdown("### The box can speak")
+    st.caption("Choose a tone and send a gentle pickup message. One nudge per parcel per day, so it never feels like nagging.")
+    pending = state.pending()
+    if not pending:
+        st.info("No parcels are waiting for pickup right now.")
+        return
+    options = {f"{p.name} · {p.code} · {p.cell}": p.code for p in pending}
+    picked = st.selectbox("Parcel", list(options), key="g3_msg_parcel")
+    p = state.parcels.get(options[picked])
+    tone = st.radio("Tone", list(state.NUDGE_TONES), horizontal=True, key="g3_msg_tone")
+    st.markdown(f"> {state.nudge_text(p, tone)}")
+    channel = st.radio("Channel", ["App notification", "SMS"], horizontal=True, key="g3_msg_channel")
+    if state.nudged.get(p.code) == state.day:
+        st.caption(f"Already nudged on day {state.day}. The hash table remembers the last nudge day for each pickup code.")
+    if st.button("Send this nudge", key="g3_msg_btn", type="primary"):
+        flash(*state.send_nudge(p.code, tone, channel))
+    if state.nudge_history:
+        st.markdown("#### Sent messages")
+        for item in reversed(state.nudge_history[-5:]):
+            st.markdown(f"**{item['name']} · {item['code']}** · {item['tone']} · {item['channel']} · day {item['day']}")
+            st.caption(item["text"])
+
+
+def care_send(state: StationState) -> None:
+    st.markdown("### Send something")
+    st.caption("Orders wait in a first-come, first-served queue until a courier is assigned. Prices are estimates for this demo.")
+    with st.form("g3_send_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            sender = st.text_input("Sender", placeholder="Your name")
+            recipient = st.text_input("Recipient", placeholder="Their name")
+            phone = st.text_input("Recipient phone", placeholder="e.g. 138 0000 1234")
+        with c2:
+            address = st.text_input("Delivery address", placeholder="campus / city address")
+            service = st.selectbox("Service", list(state.SERVICES))
+            weight = st.number_input("Weight (kg)", min_value=0.2, max_value=30.0, value=1.0, step=0.2)
+        st.markdown(f"**Estimated price:** ¥{state.delivery_price(service, weight):.1f}")
+        if st.form_submit_button("Book this delivery", type="primary"):
+            flash(*state.book_delivery(sender, recipient, phone, address, service, weight))
+    st.markdown(f"#### Waiting for a courier · {len(state.send_queue)}")
+    waiting = state.send_queue.to_list()
+    if waiting:
+        ui.table_view(["Order", "To", "Service", "Weight", "Price", "Status"],
+                      [[o["id"], o["recipient"], o["service"], f"{o['weight']} kg", f"¥{o['price']:.1f}", o["status"]]
+                       for o in waiting])
+        if st.button(f"Assign courier to {waiting[0]['id']}", key="g3_dispatch_btn", use_container_width=True):
+            flash(*state.dispatch_next_order())
+    else:
+        ui.empty("No orders waiting")
+    if state.dispatched:
+        st.markdown("#### On the way")
+        ui.table_view(["Order", "To", "Phone", "Service", "Status"],
+                      [[o["id"], o["recipient"], o["phone"], o["service"], o["status"]] for o in reversed(state.dispatched)])
+
+
+def care_gifts(state: StationState) -> None:
+    st.markdown("### Holiday gift studio")
+    st.caption("Order now; the station keeps gifts in a min-heap by arrival date, so the most urgent one always ships first.")
+    today = dt.date.today()
+    with st.form("g3_gift_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            occasion = st.selectbox("Occasion", ["Birthday", "Mid-Autumn Festival", "New Year", "Graduation", "Thank you"])
+            bundle = st.selectbox("Gift bundle", [
+                "Warmth box · tea + blanket",
+                "Study survival kit · snacks + notebook",
+                "City postcard set · 12 views",
+                "Celebration box · cake + flowers",
+            ])
+            recipient = st.text_input("Recipient")
+        with c2:
+            address = st.text_input("Delivery address")
+            arrival = st.date_input("Arrival date", value=today + dt.timedelta(days=7),
+                                    min_value=today, max_value=today + dt.timedelta(days=365))
+            note = st.text_input("Gift note", placeholder="A short message")
+        if st.form_submit_button("Schedule this gift", type="primary"):
+            flash(*state.schedule_gift(occasion, bundle, recipient, address, arrival, note, today))
+    upcoming = state.gift_heap.sorted_items()
+    st.markdown(f"#### Scheduled · {len(upcoming)}")
+    if upcoming:
+        nxt = state.gift_heap.peek()
+        st.info(f"Next to ship: {nxt['id']} for {nxt['recipient']} · arrives {nxt['date']} "
+                f"({(nxt['date'] - today).days} days from today)")
+        ui.table_view(["Gift", "Occasion", "Bundle", "Recipient", "Arrival", "Note"],
+                      [[g["id"], g["occasion"], g["bundle"], g["recipient"], str(g["date"]), g["note"]] for _, g in upcoming])
+        if st.button(f"Ship {nxt['id']}", key="g3_ship_btn", use_container_width=True):
+            flash(*state.ship_next_gift())
+    else:
+        ui.empty("No gifts scheduled")
+    if state.shipped_gifts:
+        st.markdown("#### Shipped")
+        ui.table_view(["Gift", "Recipient", "Arrival"],
+                      [[g["id"], g["recipient"], str(g["date"])] for g in reversed(state.shipped_gifts)])
 
 
 def main() -> None:
+    ui.page_setup(f"{SYSTEM} · {GROUP}", "📦", ACCENT, ACCENT2)
     state = get_state()
     show_flash()
     page = sidebar(state)
-    if page == "驿站总览":
+    if page == "Station Overview":
         page_dashboard(state)
-    elif page == "入库上架":
+    elif page == "Intake & Shelving":
         page_intake(state)
-    elif page == "取件排队":
+    elif page == "Pickup Queue":
         page_pickup(state)
-    elif page == "提醒中心":
+    elif page == "Reminders":
         page_remind(state)
-    elif page == "查询中心":
+    elif page == "Care & Send":
+        page_care(state)
+    elif page == "Search":
         page_query(state)
-    elif page == "配送路线":
+    elif page == "Delivery Route":
         page_route(state)
-    elif page == "代取分组":
+    elif page == "Pickup Groups":
         page_groups(state)
-    elif page == "数据结构总览":
+    elif page == "Data Structures":
         page_structures(state)
     else:
         page_about(state)
 
 
-main()
+if __name__ == "__main__":  # streamlit run executes the script as __main__
+    main()
